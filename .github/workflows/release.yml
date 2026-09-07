@@ -85,14 +85,10 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path deps | Out-Null
-          $base = "https://github.com/LWJGL/lwjgl/releases/download/${{ env.LWJGL_VERSION }}"
-          Invoke-WebRequest "$base/lwjgl-${{ env.LWJGL_VERSION }}.zip" -OutFile deps\lwjgl.zip
-          Expand-Archive deps\lwjgl.zip -DestinationPath deps\lwjgl-extracted -Force
-          # Locate lwjgl.jar and natives zip inside the extracted archive
-          $jar = Get-ChildItem -Recurse deps\lwjgl-extracted -Filter "lwjgl.jar" | Select-Object -First 1
-          Copy-Item $jar.FullName deps\lwjgl.jar
-          $nativesZip = Get-ChildItem -Recurse deps\lwjgl-extracted -Filter "*natives-windows*" | Select-Object -First 1
-          Expand-Archive $nativesZip.FullName -DestinationPath deps\lwjgl-natives -Force
+          $base = "https://repo1.maven.org/maven2/org/lwjgl"
+          Invoke-WebRequest "$base/lwjgl/lwjgl/${{ env.LWJGL_VERSION }}/lwjgl-${{ env.LWJGL_VERSION }}.jar" -OutFile deps\lwjgl.jar
+          Invoke-WebRequest "$base/lwjgl/lwjgl-platform/${{ env.LWJGL_VERSION }}/lwjgl-platform-${{ env.LWJGL_VERSION }}-natives-windows.jar" -OutFile deps\lwjgl-natives.jar
+          Expand-Archive deps\lwjgl-natives.jar -DestinationPath deps\lwjgl-natives -Force
 
       - name: Download JNA ${{ env.JNA_VERSION }}
         if: steps.cache-deps.outputs.cache-hit != 'true'
