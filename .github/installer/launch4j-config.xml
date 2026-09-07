@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  launch4j configuration for Towns.
+  %DIST_DIR% is replaced at workflow runtime with the absolute path to dist/Towns.
+-->
+<launch4jConfig>
+
+  <!-- Output native Windows executable -->
+  <dontWrapJar>false</dontWrapJar>
+  <headerType>gui</headerType>
+  <jar>%DIST_DIR%\Towns.jar</jar>
+  <outfile>%DIST_DIR%\Towns.exe</outfile>
+  <errTitle>Towns</errTitle>
+  <cmdLine></cmdLine>
+
+  <!--
+    Working directory is set to the directory that contains the executable.
+    This ensures towns.ini and graphics.ini are found at runtime.
+  -->
+  <chdir>.</chdir>
+
+  <priority>normal</priority>
+  <downloadUrl>https://adoptium.net/</downloadUrl>
+  <supportUrl></supportUrl>
+  <stayAlive>false</stayAlive>
+  <restartOnCrash>false</restartOnCrash>
+
+  <!-- Bundled JRE produced by jlink; no external Java installation required -->
+  <jre>
+    <path>runtime</path>
+    <requiresJdk>false</requiresJdk>
+    <is64Bit>true</is64Bit>
+    <minVersion>21</minVersion>
+    <opts>
+      <opt>-Djava.library.path=lwjgl-natives</opt>
+    </opts>
+  </jre>
+
+  <!-- Additional classpath entries resolved relative to the exe directory -->
+  <classPath>
+    <mainClass>xaos.Towns</mainClass>
+    <cp>Towns.jar</cp>
+    <cp>jna.jar</cp>
+  </classPath>
+
+  <!-- Windows version info shown in file properties -->
+  <versionInfo>
+    <fileVersion>%VERSION_NUMERIC%.0.0.0</fileVersion>
+    <txtFileVersion>%VERSION_PLAIN%</txtFileVersion>
+    <fileDescription>Towns — Colony Management Game</fileDescription>
+    <copyright>GNU GPL v3</copyright>
+    <productVersion>%VERSION_NUMERIC%.0.0.0</productVersion>
+    <txtProductVersion>%VERSION_PLAIN%</txtProductVersion>
+    <productName>Towns</productName>
+    <companyName>Towns Project</companyName>
+    <internalName>Towns</internalName>
+    <originalFilename>Towns.exe</originalFilename>
+  </versionInfo>
+
+</launch4jConfig>

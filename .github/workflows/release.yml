@@ -1,0 +1,248 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag (e.g. v15)'
+        required: true
+        default: 'v0'
+
+permissions:
+  contents: write
+
+env:
+  LWJGL_VERSION: "2.9.3"
+  JNA_VERSION: "5.14.0"
+  LAUNCH4J_VERSION: "3.14"
+
+jobs:
+  build-release:
+    runs-on: windows-latest
+
+    steps:
+      # ── 1. Checkout ──────────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Set up Java 21 (Temurin) ──────────────────────────────────────────
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      # ── 3. Resolve version string ─────────────────────────────────────────────
+      - name: Resolve version
+        id: version
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            VERSION="${{ github.ref_name }}"
+          fi
+          # Validate: must match v<digits> or plain <digits>
+          if ! [[ "$VERSION" =~ ^v?[0-9]+([a-z][0-9a-z]*)?$ ]]; then
+            echo "ERROR: Version '$VERSION' does not match expected pattern (e.g. v15, v14e)."
+            exit 1
+          fi
+          echo "VERSION=$VERSION" >> "$GITHUB_OUTPUT"
+          # Strip leading 'v' for NSIS/launch4j (needs numeric-ish string)
+          VERSION_PLAIN="${VERSION#v}"
+          echo "VERSION_PLAIN=$VERSION_PLAIN" >> "$GITHUB_OUTPUT"
+          # Numeric-only portion for Windows file version (major component)
+          VERSION_NUMERIC=$(echo "$VERSION_PLAIN" | sed 's/[^0-9].*//')
+          echo "VERSION_NUMERIC=$VERSION_NUMERIC" >> "$GITHUB_OUTPUT"
+
+      # ── 3b. Create git tag for workflow_dispatch runs ─────────────────────────
+      - name: Create tag (workflow_dispatch only)
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          # Create the tag via the GitHub API so it is visible to the release action
+          gh api repos/${{ github.repository }}/git/refs \
+            -f ref="refs/tags/$VERSION" \
+            -f sha="${{ github.sha }}" || true
+
+      # ── 4. Cache dependencies ─────────────────────────────────────────────────
+      - name: Cache LWJGL and JNA
+        id: cache-deps
+        uses: actions/cache@v4
+        with:
+          path: deps
+          key: deps-lwjgl${{ env.LWJGL_VERSION }}-jna${{ env.JNA_VERSION }}
+
+      # ── 5. Download dependencies ──────────────────────────────────────────────
+      - name: Download LWJGL 2.9.3
+        if: steps.cache-deps.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path deps | Out-Null
+          $base = "https://github.com/LWJGL/lwjgl/releases/download/${{ env.LWJGL_VERSION }}"
+          Invoke-WebRequest "$base/lwjgl-${{ env.LWJGL_VERSION }}.zip" -OutFile deps\lwjgl.zip
+          Expand-Archive deps\lwjgl.zip -DestinationPath deps\lwjgl-extracted -Force
+          # Locate lwjgl.jar and natives zip inside the extracted archive
+          $jar = Get-ChildItem -Recurse deps\lwjgl-extracted -Filter "lwjgl.jar" | Select-Object -First 1
+          Copy-Item $jar.FullName deps\lwjgl.jar
+          $nativesZip = Get-ChildItem -Recurse deps\lwjgl-extracted -Filter "*natives-windows*" | Select-Object -First 1
+          Expand-Archive $nativesZip.FullName -DestinationPath deps\lwjgl-natives -Force
+
+      - name: Download JNA ${{ env.JNA_VERSION }}
+        if: steps.cache-deps.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $base = "https://repo1.maven.org/maven2/net/java/dev/jna/jna/${{ env.JNA_VERSION }}"
+          Invoke-WebRequest "$base/jna-${{ env.JNA_VERSION }}.jar" -OutFile deps\jna.jar
+
+      # ── 6. Compile Java sources ───────────────────────────────────────────────
+      - name: Compile
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path out | Out-Null
+          # Collect all .java files
+          Get-ChildItem -Recurse src\xaos -Filter "*.java" |
+            ForEach-Object { $_.FullName } |
+            Set-Content sources.txt
+          javac -cp "deps\lwjgl.jar;deps\jna.jar" `
+                -sourcepath src `
+                -d out `
+                "@sources.txt"
+
+      # ── 7. Package fat JAR ────────────────────────────────────────────────────
+      - name: Package Towns.jar
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist\Towns | Out-Null
+
+          # Write manifest
+          $manifest = "Manifest-Version: 1.0`r`nMain-Class: xaos.Towns`r`nClass-Path: jna.jar`r`n`r`n"
+          [System.IO.File]::WriteAllText("$PWD\manifest.txt", $manifest)
+
+          # Build jar: compiled classes + LWJGL classes + game assets from src/
+          # (excluding .java source files).
+          # Extract LWJGL classes into a separate directory so its META-INF/MANIFEST.MF
+          # does not overwrite the game manifest.
+          New-Item -ItemType Directory -Force -Path lwjgl-classes | Out-Null
+          jar --extract --dir=lwjgl-classes --file=deps\lwjgl.jar
+          # Remove LWJGL's own manifest so it won't interfere
+          Remove-Item -Force lwjgl-classes\META-INF\MANIFEST.MF -ErrorAction SilentlyContinue
+          # Write the game manifest first, then create the fat JAR
+          jar cfm dist\Towns\Towns.jar manifest.txt -C out . -C lwjgl-classes .
+          # Copy non-Java assets to a staging dir and add them to the JAR
+          New-Item -ItemType Directory -Force -Path src-assets | Out-Null
+          Get-ChildItem -Recurse src -File | Where-Object { $_.Extension -ne '.java' } |
+            ForEach-Object {
+              $rel = $_.FullName.Substring("$PWD\src\".Length)
+              $dest = "src-assets\$rel"
+              New-Item -ItemType Directory -Force -Path (Split-Path $dest) | Out-Null
+              Copy-Item $_.FullName $dest
+            }
+          jar uf dist\Towns\Towns.jar -C src-assets .
+
+      # ── 8. Build minimal JRE with jlink ──────────────────────────────────────
+      - name: Build bundled JRE
+        shell: pwsh
+        run: |
+          jlink `
+            --module-path "$env:JAVA_HOME\jmods" `
+            --add-modules java.base,java.desktop,java.logging,java.prefs `
+            --output dist\Towns\runtime `
+            --strip-debug `
+            --no-header-files `
+            --no-man-pages `
+            --compress=zip-6
+
+      # ── 9. Assemble distribution folder ──────────────────────────────────────
+      - name: Assemble distribution folder
+        shell: pwsh
+        run: |
+          # Native DLLs
+          New-Item -ItemType Directory -Force -Path dist\Towns\lwjgl-natives | Out-Null
+          Copy-Item deps\lwjgl-natives\* dist\Towns\lwjgl-natives\ -Recurse -Force
+
+          # JNA jar (on classpath at runtime)
+          Copy-Item deps\jna.jar dist\Towns\jna.jar
+
+          # launch.bat fallback launcher
+          $bat = @'
+          @echo off
+          cd /d "%~dp0"
+          runtime\bin\java.exe ^
+            -cp "Towns.jar;jna.jar" ^
+            -Djava.library.path=lwjgl-natives ^
+            xaos.Towns
+          '@
+          Set-Content -Path dist\Towns\launch.bat -Value $bat
+
+      # ── 10. Download launch4j ─────────────────────────────────────────────────
+      - name: Download launch4j
+        shell: pwsh
+        run: |
+          $url = "https://sourceforge.net/projects/launch4j/files/launch4j-3/${{ env.LAUNCH4J_VERSION }}/launch4j-${{ env.LAUNCH4J_VERSION }}-win32.zip/download"
+          Invoke-WebRequest $url -OutFile launch4j.zip -UserAgent "Wget/1.21"
+          Expand-Archive launch4j.zip -DestinationPath launch4j -Force
+
+      # ── 11. Create Windows EXE with launch4j ─────────────────────────────────
+      - name: Build Towns.exe
+        shell: pwsh
+        run: |
+          # Inject absolute paths and version into the launch4j config
+          $xml = Get-Content .github\installer\launch4j-config.xml -Raw
+          $xml = $xml -replace '%DIST_DIR%', "$PWD\dist\Towns"
+          $xml = $xml -replace '%VERSION_PLAIN%', "${{ steps.version.outputs.VERSION_PLAIN }}"
+          $xml = $xml -replace '%VERSION_NUMERIC%', "${{ steps.version.outputs.VERSION_NUMERIC }}"
+          Set-Content launch4j-resolved.xml $xml
+
+          # Run launch4j
+          $l4j = Get-ChildItem -Recurse launch4j -Filter "launch4jc.exe" | Select-Object -First 1
+          & $l4j.FullName "$PWD\launch4j-resolved.xml"
+
+      # ── 12. Build NSIS installer ──────────────────────────────────────────────
+      - name: Install NSIS
+        shell: pwsh
+        run: choco install nsis --no-progress -y
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          $version = "${{ steps.version.outputs.VERSION_PLAIN }}"
+          $distDir = "$PWD\dist\Towns"
+          $outFile = "$PWD\Towns-Setup-${{ steps.version.outputs.VERSION }}.exe"
+          makensis `
+            "/DVERSION=$version" `
+            "/DDIST_DIR=$distDir" `
+            "/DOUTFILE=$outFile" `
+            .github\installer\installer.nsi
+
+      # ── 13. Extract changelog notes for this release ─────────────────────────
+      - name: Extract release notes
+        id: notes
+        shell: pwsh
+        run: |
+          $tag = "${{ steps.version.outputs.VERSION }}"
+          $content = Get-Content CHANGELOG.md -Raw
+          # CHANGELOG uses "Version v15" headers (with the leading 'v'), so $tag matches directly.
+          # Match the block for this version (between the version header and the next "-----" separator)
+          if ($content -match "(?ms)Version $tag\r?\n-----\r?\n(.*?)\r?\n-----") {
+            $notes = $Matches[1].Trim()
+          } else {
+            $notes = "Release $tag"
+          }
+          # Write to file to avoid quoting issues
+          Set-Content release_notes.txt $notes
+
+      # ── 14. Create GitHub Release ─────────────────────────────────────────────
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.VERSION }}
+          name: Towns ${{ steps.version.outputs.VERSION }}
+          body_path: release_notes.txt
+          files: Towns-Setup-${{ steps.version.outputs.VERSION }}.exe
