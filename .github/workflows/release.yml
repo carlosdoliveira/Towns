@@ -85,9 +85,9 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path deps | Out-Null
-          $base = "https://repo1.maven.org/maven2/org/lwjgl/lwjgl"
-          Invoke-WebRequest "$base/lwjgl/${{ env.LWJGL_VERSION }}/lwjgl-${{ env.LWJGL_VERSION }}.jar" -OutFile deps\lwjgl.jar
-          Invoke-WebRequest "$base/lwjgl-platform/${{ env.LWJGL_VERSION }}/lwjgl-platform-${{ env.LWJGL_VERSION }}-natives-windows.jar" -OutFile deps\lwjgl-natives.jar
+          $base = "https://repo1.maven.org/maven2/org/lwjgl"
+          Invoke-WebRequest "$base/lwjgl/lwjgl/${{ env.LWJGL_VERSION }}/lwjgl-${{ env.LWJGL_VERSION }}.jar" -OutFile deps\lwjgl.jar
+          Invoke-WebRequest "$base/lwjgl/lwjgl-platform/${{ env.LWJGL_VERSION }}/lwjgl-platform-${{ env.LWJGL_VERSION }}-natives-windows.jar" -OutFile deps\lwjgl-natives.jar
           Expand-Archive deps\lwjgl-natives.jar -DestinationPath deps\lwjgl-natives -Force
 
       - name: Download JNA ${{ env.JNA_VERSION }}
