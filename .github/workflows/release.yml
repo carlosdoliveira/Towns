@@ -107,6 +107,7 @@ jobs:
             ForEach-Object { $_.FullName } |
             Set-Content sources.txt
           javac -cp "deps\lwjgl.jar;deps\jna.jar" `
+                -encoding ISO-8859-1 `
                 -sourcepath src `
                 -d out `
                 "@sources.txt"
